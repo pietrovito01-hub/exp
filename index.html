@@ -1,97 +1,330 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Expense Tracker</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      max-width: 600px;
-      margin: 40px auto;
-      padding: 20px;
-      background: #f5f5f5;
-    }
-    h1 { text-align: center; }
-    form {
-      display: flex;
-      gap: 10px;
-      margin-bottom: 20px;
-    }
-    input, button {
-      padding: 8px;
-      font-size: 14px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: white;
-    }
-    th, td {
-      padding: 10px;
-      border-bottom: 1px solid #ddd;
-      text-align: left;
-    }
-    th {
-      background: #eee;
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Expense Tracker (Persistent)</title>
+    <!-- Load Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        /* Custom scrollbar style for expense list */
+        #expensesListContainer {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        #expensesListContainer::-webkit-scrollbar {
+            width: 6px;
+        }
+        #expensesListContainer::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1; /* slate-300 */
+            border-radius: 3px;
+        }
+    </style>
 </head>
-<body>
+<body class="min-h-screen p-4 sm:p-8">
+    <div class="max-w-xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl">
+        <h1 class="text-3xl font-bold text-gray-900 mb-6 text-center">Expense Tracker (Persistent)</h1>
+        <p class="text-sm text-center text-gray-500 mb-6">
+            Data is now saved and retrieved persistently using Google Firestore.
+        </p>
 
-  <h1>Expense Tracker</h1>
+        <!-- Total Display Section -->
+        <div class="bg-indigo-50 p-4 rounded-lg mb-6 shadow-md">
+            <h2 class="text-lg font-semibold text-indigo-800">Total Spent</h2>
+            <p class="text-4xl font-extrabold text-indigo-700 mt-1">
+                $<span id="totalAmount">0.00</span>
+            </p>
+        </div>
 
-  <form id="expenseForm">
-    <input type="text" id="description" placeholder="Description" required />
-    <input type="number" step="0.01" id="amount" placeholder="Amount" required />
-    <button type="submit">Add</button>
-  </form>
+        <!-- Add Expense Form -->
+        <div class="mb-8 border-b pb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Add New Expense</h2>
+            
+            <!-- Message Box for feedback (instead of alert()) -->
+            <div id="messageBox" class="hidden text-center p-2 rounded-lg font-medium mb-3"></div>
+            <p id="userIdDisplay" class="text-xs text-right text-gray-400 mb-2"></p>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Description</th>
-        <th>Amount (€)</th>
-        <th>Created</th>
-      </tr>
-    </thead>
-    <tbody id="expensesBody"></tbody>
-  </table>
+            <form id="expenseForm" class="space-y-4">
+                <div>
+                    <label for="description" class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <input type="text" id="description" name="description" required 
+                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                           placeholder="Groceries, Rent, Coffee, etc.">
+                </div>
+                <div>
+                    <label for="amount" class="block text-sm font-medium text-gray-700 mb-1">Amount ($)</label>
+                    <input type="number" id="amount" name="amount" required step="0.01" min="0.01"
+                           class="w-full p-3 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                           placeholder="15.50">
+                </div>
+                <button type="submit" 
+                        class="w-full bg-indigo-600 text-white p-3 rounded-lg font-semibold hover:bg-indigo-700 transition duration-200 shadow-md">
+                    Add Expense
+                </button>
+            </form>
+        </div>
 
-  <script>
-    async function loadExpenses() {
-      const res = await fetch("/api/expenses");
-      const data = await res.json();
-      const tbody = document.getElementById("expensesBody");
-      tbody.innerHTML = "";
+        <!-- Expense List Section -->
+        <div>
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">Recent Transactions</h2>
+            <div id="expensesListContainer" class="p-2 border border-gray-200 rounded-lg bg-gray-50 shadow-inner">
+                <ul id="expensesList" class="divide-y divide-gray-200">
+                    <!-- Expenses will be dynamically inserted here -->
+                    <li class="text-center text-gray-400 p-4">Initializing database...</li>
+                </ul>
+            </div>
+            
+        </div>
+    </div>
 
-      data.forEach(exp => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${exp.description}</td>
-          <td>${exp.amount}</td>
-          <td>${new Date(exp.createdAt).toLocaleString()}</td>
-        `;
-        tbody.appendChild(tr);
-      });
-    }
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, onSnapshot, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-    document.getElementById("expenseForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const description = document.getElementById("description").value;
-      const amount = document.getElementById("amount").value;
+        // setLogLevel('Debug'); // Uncomment to see Firebase logs
 
-      await fetch("/api/expenses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ description, amount }),
-      });
+        // --- Firebase Configuration & State ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-      e.target.reset();
-      loadExpenses();
-    });
+        let app;
+        let db;
+        let auth;
+        let userId = null;
+        let isAuthReady = false;
 
-    loadExpenses();
-  </script>
+        // --- DOM Constants ---
+        const expensesList = document.getElementById('expensesList');
+        const totalDisplay = document.getElementById('totalAmount');
+        const messageBox = document.getElementById('messageBox');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        
+        // --- Utility Functions ---
 
+        /**
+         * Shows a temporary status message to the user.
+         */
+        function showTemporaryMessage(message, type) {
+            messageBox.textContent = message;
+            messageBox.classList.remove('hidden', 'text-green-700', 'text-red-700', 'bg-red-100', 'bg-green-100');
+            
+            if (type === 'success') {
+                messageBox.classList.add('text-green-700', 'bg-green-100');
+            } else {
+                messageBox.classList.add('text-red-700', 'bg-red-100');
+            }
+            
+            setTimeout(() => {
+                messageBox.classList.add('hidden');
+            }, 3500);
+        }
+
+        /**
+         * Disables/enables the form inputs and updates the submit button text.
+         */
+        function setFormState(isLoading) {
+            const form = document.getElementById('expenseForm');
+            if (!form) return;
+            const submitButton = form.querySelector('button[type="submit"]');
+            const inputs = form.querySelectorAll('input');
+
+            inputs.forEach(input => input.disabled = isLoading);
+            submitButton.disabled = isLoading;
+            submitButton.textContent = isLoading ? 'Saving...' : 'Add Expense';
+            submitButton.classList.toggle('opacity-70', isLoading);
+            submitButton.classList.toggle('cursor-not-allowed', isLoading);
+        }
+
+
+        // --- Core Logic Functions ---
+
+        /**
+         * Renders the list of expenses into the DOM and calculates the total.
+         */
+        function renderExpenses(expenses) {
+            if (!expenses || expenses.length === 0) {
+                expensesList.innerHTML = '<li class="text-center text-gray-500 italic p-4">No expenses recorded yet.</li>';
+                totalDisplay.textContent = '0.00';
+                return;
+            }
+
+            // Sort by creation date (newest first)
+            expenses.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+            let total = 0;
+            let listHtml = '';
+
+            expenses.forEach(expense => {
+                // Ensure amount is treated as a number
+                const amount = Number(expense.amount);
+                total += amount;
+
+                // Format date nicely (use expense.createdAt or a fallback)
+                const dateString = expense.createdAt ? new Date(expense.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'Unknown Date';
+
+                listHtml += `
+                    <li class="flex justify-between items-center py-3 px-1 bg-white hover:bg-gray-50 transition duration-150">
+                        <div class="flex flex-col">
+                            <span class="font-medium text-gray-800">${expense.description || 'N/A'}</span>
+                            <span class="text-xs text-gray-400">${dateString}</span>
+                        </div>
+                        <span class="font-bold text-red-600 text-xl">
+                            -\$${amount.toFixed(2)}
+                        </span>
+                    </li>
+                `;
+            });
+
+            expensesList.innerHTML = listHtml;
+            totalDisplay.textContent = total.toFixed(2);
+        }
+
+        /**
+         * Sets up the real-time listener for expense data from Firestore.
+         */
+        function listenForExpenses() {
+            if (!db || !userId) {
+                console.warn("Firestore or User ID not available for listening.");
+                return;
+            }
+            
+            // Private user collection path
+            const expensesCollectionPath = `artifacts/${appId}/users/${userId}/expenses`;
+            const q = query(collection(db, expensesCollectionPath));
+
+            onSnapshot(q, (snapshot) => {
+                const expenses = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                    // Ensure amount is handled as a number
+                    amount: Number(doc.data().amount)
+                }));
+                renderExpenses(expenses);
+            }, (error) => {
+                console.error("Error listening to expenses:", error);
+                expensesList.innerHTML = '<li class="text-center text-red-500 p-4">Database error. Check console.</li>';
+                showTemporaryMessage('Real-time database connection failed.', 'error');
+            });
+        }
+        
+        /**
+         * Handles form submission: saves expense data to Firestore.
+         */
+        async function addExpense(event) {
+            event.preventDefault();
+
+            const form = event.target;
+            const descriptionInput = form.elements.description;
+            const amountInput = form.elements.amount;
+            
+            const description = descriptionInput.value.trim();
+            const amount = amountInput.value;
+
+            if (!description || !amount) {
+                showTemporaryMessage('Description and amount are required.', 'error');
+                return;
+            }
+
+            // Check if Firebase is ready
+            if (!isAuthReady || !db || !userId) {
+                showTemporaryMessage('Database connection not established. Please wait.', 'error');
+                return;
+            }
+
+            const payload = {
+                description: description,
+                amount: parseFloat(amount), // Store as number
+                createdAt: new Date().toISOString(), // Use ISO string for sorting
+            };
+
+            setFormState(true);
+
+            try {
+                const expensesCollectionPath = `artifacts/${appId}/users/${userId}/expenses`;
+                await addDoc(collection(db, expensesCollectionPath), payload);
+
+                // Success is handled by the onSnapshot listener, just clear the form and show message
+                descriptionInput.value = ''; 
+                amountInput.value = '';
+                showTemporaryMessage('Expense added successfully!', 'success');
+
+            } catch (error) {
+                console.error("Error adding expense:", error);
+                showTemporaryMessage(`Error: Failed to save expense.`, 'error');
+            } finally {
+                setFormState(false);
+            }
+        }
+
+        /**
+         * Initializes Firebase and sets up authentication listener.
+         */
+        async function initAppAndLoad() {
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                // 1. Attempt Sign In
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (e) {
+                    console.error("Authentication failed:", e);
+                    showTemporaryMessage('Authentication failed. Cannot access data.', 'error');
+                    // Fall through to onAuthStateChanged listener to update state
+                }
+
+                // 2. Set up Auth State Listener
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        userIdDisplay.textContent = `User ID: ${userId}`;
+                        listenForExpenses();
+                        setFormState(false); // Enable form after auth
+                    } else {
+                        userId = null;
+                        isAuthReady = false;
+                        userIdDisplay.textContent = 'User ID: N/A (Signed Out)';
+                        expensesList.innerHTML = '<li class="text-center text-gray-500 italic p-4">Authentication required to load expenses.</li>';
+                        setFormState(true); // Disable form if not authenticated
+                    }
+                });
+
+            } catch (e) {
+                console.error("Firebase initialization failed:", e);
+                showTemporaryMessage('Failed to initialize Firebase services.', 'error');
+                expensesList.innerHTML = '<li class="text-center text-red-500 p-4">Initialization failed.</li>';
+            }
+        }
+
+        
+        // --- Initialization ---
+
+        window.addEventListener('load', () => {
+            // Disable form initially until authentication is confirmed
+            setFormState(true); 
+            
+            const form = document.getElementById('expenseForm');
+            if (form) {
+                form.addEventListener('submit', addExpense);
+            }
+            
+            // Start the application initialization
+            initAppAndLoad();
+        });
+
+    </script>
 </body>
 </html>
